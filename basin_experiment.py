@@ -13,6 +13,7 @@ import pandas as pd
 from tqdm import tqdm
 from typing import Optional
 from huggingface_hub import hf_hub_download
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from assistant_axis.internals.model import ProbingModel
 from assistant_axis.steering import ActivationSteering
@@ -98,11 +99,25 @@ class BasinExperiment:
             torch.use_deterministic_algorithms(True, warn_only=True)
             torch.backends.cudnn.deterministic = True
             torch.backends.cudnn.benchmark = False
-            torch.backends.cuda.enable_flash_sdp(False)
-            torch.backends.cuda.enable_mem_efficient_sdp(False)
+            # NOTE: Do NOT disable flash_sdp/mem_efficient_sdp here.
+            # The math SDPA fallback overflows in bf16 on large models.
+            # Instead, we pass attn_implementation="eager" to the model.
 
         self.model_name = model_name
-        self.pm = ProbingModel(model_name, device=device, dtype=dtype)
+        self._deterministic = deterministic
+
+        if deterministic:
+            # Load model ourselves with eager attention, then wrap in ProbingModel
+            model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                torch_dtype=dtype,
+                device_map="auto",
+                attn_implementation="eager",
+            )
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            self.pm = ProbingModel.from_existing(model, tokenizer, model_name=model_name)
+        else:
+            self.pm = ProbingModel(model_name, device=device, dtype=dtype)
         self.tokenizer = self.pm.tokenizer
         self.layers = self.pm.get_layers()
         self.num_layers = len(self.layers)
