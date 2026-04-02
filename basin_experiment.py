@@ -6,6 +6,14 @@ Uses the assistant-axis infrastructure (Lu et al., 2026) for model loading,
 activation extraction, and hook-based intervention.
 """
 
+import sys
+from pathlib import Path
+
+# Add cloned assistant-axis repo to path (avoids installing vllm)
+_AXIS_REPO = Path(__file__).parent / "assistant-axis"
+if _AXIS_REPO.exists() and str(_AXIS_REPO) not in sys.path:
+    sys.path.insert(0, str(_AXIS_REPO))
+
 import torch
 import torch.nn.functional as F
 import numpy as np
