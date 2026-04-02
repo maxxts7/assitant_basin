@@ -8,16 +8,13 @@ dependencies = [
     "torch>=2.0",
     "transformers>=4.40",
     "huggingface_hub",
+    "accelerate>=0.27.0",
     "numpy",
     "matplotlib",
     "pandas",
     "tqdm",
     "scipy",
     "typing_extensions>=4.12",
-]
-
-[project.optional-dependencies]
-notebook = [
     "jupyter",
     "ipykernel",
 ]

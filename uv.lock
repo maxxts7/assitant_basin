@@ -172,8 +172,11 @@ name = "assistant-basin"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "accelerate" },
     { name = "assistant-axis" },
     { name = "huggingface-hub" },
+    { name = "ipykernel" },
+    { name = "jupyter" },
     { name = "matplotlib" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -187,18 +190,13 @@ dependencies = [
     { name = "typing-extensions" },
 ]
 
-[package.optional-dependencies]
-notebook = [
-    { name = "ipykernel" },
-    { name = "jupyter" },
-]
-
 [package.metadata]
 requires-dist = [
+    { name = "accelerate", specifier = ">=0.27.0" },
     { name = "assistant-axis", git = "https://github.com/safety-research/assistant-axis.git" },
     { name = "huggingface-hub" },
-    { name = "ipykernel", marker = "extra == 'notebook'" },
-    { name = "jupyter", marker = "extra == 'notebook'" },
+    { name = "ipykernel" },
+    { name = "jupyter" },
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "pandas" },
@@ -208,7 +206,6 @@ requires-dist = [
     { name = "transformers", specifier = ">=4.40" },
     { name = "typing-extensions", specifier = ">=4.12" },
 ]
-provides-extras = ["notebook"]
 
 [[package]]
 name = "asttokens"
