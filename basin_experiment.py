@@ -293,7 +293,13 @@ class BasinExperiment:
             conversation, tokenize=False, add_generation_prompt=True
         )
         tokens = self.tokenizer(text, return_tensors="pt")
-        return tokens["input_ids"].to(self.pm.model.device)
+        # With device_map="auto", model has no single .device — find the embedding device
+        if hasattr(self.pm.model, "hf_device_map"):
+            first_device = next(iter(self.pm.model.hf_device_map.values()))
+            device = f"cuda:{first_device}" if isinstance(first_device, int) else first_device
+        else:
+            device = self.pm.model.device
+        return tokens["input_ids"].to(device)
 
     # ------------------------------------------------------------------
     # Full experiment

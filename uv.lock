@@ -170,7 +170,7 @@ dependencies = [
 [[package]]
 name = "assistant-basin"
 version = "0.1.0"
-source = { editable = "." }
+source = { virtual = "." }
 dependencies = [
     { name = "accelerate" },
     { name = "assistant-axis" },
