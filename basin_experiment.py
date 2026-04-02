@@ -177,20 +177,19 @@ class BasinExperiment:
         deterministic: bool = False,
     ):
         if deterministic:
-            torch.use_deterministic_algorithms(True, warn_only=True)
+            # Do NOT call torch.use_deterministic_algorithms() — it forces
+            # SDPA to use the math backend, which overflows in bf16 on large
+            # models.  Instead we pin cudnn (convolutions) and disable
+            # benchmarking.  Flash/mem-efficient SDPA is near-deterministic;
+            # the sanity-check cell verifies residual jitter is negligible.
             torch.backends.cudnn.deterministic = True
             torch.backends.cudnn.benchmark = False
-            # NOTE: Do NOT disable flash_sdp/mem_efficient_sdp here.
-            # The math SDPA fallback overflows in bf16 on large models.
-            # Instead, we pass attn_implementation="eager" to the model.
 
         self.model_name = model_name
         self._deterministic = deterministic
 
         # ---- Load model & tokenizer ----
         model_kwargs = dict(torch_dtype=dtype, device_map="auto")
-        if deterministic:
-            model_kwargs["attn_implementation"] = "eager"
 
         self.model = AutoModelForCausalLM.from_pretrained(model_name, **model_kwargs)
         self.model.eval()
