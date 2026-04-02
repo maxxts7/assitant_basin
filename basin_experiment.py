@@ -2,15 +2,13 @@
 Basin Experiment: Perturbation-recovery protocol for establishing
 the existence of an assistant basin in transformer activation space.
 
-Uses the assistant-axis infrastructure (Lu et al., 2026) for model loading,
-activation extraction, and hook-based intervention.
+Built on the Assistant Axis (Lu et al., 2026). This module is self-contained
+and does not require the assistant-axis repository at runtime — it only needs
+the pre-computed axis vectors hosted on HuggingFace.
 """
 
-import sys
-import importlib.util
-from pathlib import Path
-
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import pandas as pd
@@ -21,26 +19,86 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
 # ---------------------------------------------------------------------------
-# Direct file imports from assistant-axis (bypasses __init__.py which pulls
-# in vllm, sklearn, plotly etc. that we don't need)
+# Axis loading (replaces assistant_axis.axis.load_axis)
 # ---------------------------------------------------------------------------
-def _import_file(module_name: str, file_path: Path):
-    spec = importlib.util.spec_from_file_location(module_name, file_path)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = mod
-    spec.loader.exec_module(mod)
-    return mod
 
-_AXIS_DIR = Path(__file__).parent / "assistant-axis" / "assistant_axis"
+def load_axis(path: str) -> torch.Tensor:
+    """Load a pre-computed assistant axis from a .pt file.
 
-_model_mod = _import_file("assistant_axis.internals.model", _AXIS_DIR / "internals" / "model.py")
-_steering_mod = _import_file("assistant_axis.steering", _AXIS_DIR / "steering.py")
-_axis_mod = _import_file("assistant_axis.axis", _AXIS_DIR / "axis.py")
+    Handles both formats: dict with 'axis' key, or raw tensor.
+    Returns tensor of shape (num_layers, hidden_dim).
+    """
+    data = torch.load(path, map_location="cpu", weights_only=False)
+    if isinstance(data, dict):
+        if "axis" in data:
+            return data["axis"]
+        raise ValueError("Expected 'axis' key in saved dict")
+    return data
 
-ProbingModel = _model_mod.ProbingModel
-ActivationSteering = _steering_mod.ActivationSteering
-load_axis = _axis_mod.load_axis
-project = _axis_mod.project
+
+# ---------------------------------------------------------------------------
+# Layer discovery (replaces ProbingModel.get_layers)
+# ---------------------------------------------------------------------------
+
+# Attribute paths for transformer layers across model families
+_LAYER_PATHS = [
+    lambda m: m.model.layers,            # Llama, Gemma 2, Qwen, Mistral
+    lambda m: m.language_model.layers,    # Gemma 3, LLaVA (vision-language)
+    lambda m: m.transformer.h,            # GPT-2/Neo, Bloom
+    lambda m: m.transformer.layers,       # Some transformer variants
+    lambda m: m.gpt_neox.layers,          # GPT-NeoX
+]
+
+
+def _get_layers(model: nn.Module) -> nn.ModuleList:
+    """Find the transformer layer list for any supported architecture."""
+    for path_fn in _LAYER_PATHS:
+        try:
+            layers = path_fn(model)
+            if layers is not None and hasattr(layers, "__len__") and len(layers) > 0:
+                return layers
+        except AttributeError:
+            continue
+    raise AttributeError(
+        f"Could not find transformer layers for {type(model).__name__}. "
+        f"Supported architectures: Llama, Gemma, Qwen, GPT-2/Neo, GPT-NeoX."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Perturbation hook (replaces ActivationSteering for our specific use case)
+# ---------------------------------------------------------------------------
+
+class _PerturbationHook:
+    """Context manager that adds a perturbation vector to the last token at one layer.
+
+    This replaces ActivationSteering for the single use case needed here:
+    intervention_type="addition", positions="last", one vector, one layer.
+    """
+
+    def __init__(self, layer_module: nn.Module, delta: torch.Tensor):
+        self._layer = layer_module
+        self._delta = delta
+        self._handle = None
+
+    def __enter__(self):
+        def hook_fn(module, input, output):
+            if torch.is_tensor(output):
+                modified = output.clone()
+                modified[:, -1, :] += self._delta.to(output.device)
+                return modified
+            # Tuple output (hidden_states, ...)
+            hidden = output[0].clone()
+            hidden[:, -1, :] += self._delta.to(hidden.device)
+            return (hidden, *output[1:])
+
+        self._handle = self._layer.register_forward_hook(hook_fn)
+        return self
+
+    def __exit__(self, *exc):
+        if self._handle is not None:
+            self._handle.remove()
+            self._handle = None
 
 
 # ---------------------------------------------------------------------------
@@ -105,9 +163,9 @@ def make_perturbation(
 class BasinExperiment:
     """Runs perturbation-recovery experiments on transformer residual streams.
 
-    Uses ProbingModel for model loading and ActivationSteering for hook-based
-    perturbation injection. Measures whether subsequent layers restore
-    activations toward the baseline after perturbation.
+    Loads a HuggingFace model and a pre-computed assistant axis, then measures
+    whether subsequent layers restore activations toward the baseline after
+    perturbation along (or away from) the axis.
     """
 
     def __init__(
@@ -129,27 +187,37 @@ class BasinExperiment:
         self.model_name = model_name
         self._deterministic = deterministic
 
+        # ---- Load model & tokenizer ----
+        model_kwargs = dict(torch_dtype=dtype, device_map="auto")
         if deterministic:
-            # Load model ourselves with eager attention, then wrap in ProbingModel
-            model = AutoModelForCausalLM.from_pretrained(
-                model_name,
-                torch_dtype=dtype,
-                device_map="auto",
-                attn_implementation="eager",
-            )
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
-            self.pm = ProbingModel.from_existing(model, tokenizer, model_name=model_name)
-        else:
-            self.pm = ProbingModel(model_name, device=device, dtype=dtype)
-        self.tokenizer = self.pm.tokenizer
-        self.layers = self.pm.get_layers()
+            model_kwargs["attn_implementation"] = "eager"
+
+        self.model = AutoModelForCausalLM.from_pretrained(model_name, **model_kwargs)
+        self.model.eval()
+
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        self.layers = _get_layers(self.model)
         self.num_layers = len(self.layers)
 
-        # Load axis
+        # ---- Load axis ----
         if axis_path is None:
             axis_path = download_axis(model_name)
         self.axis = load_axis(axis_path)  # (num_layers, hidden_dim)
         self.hidden_dim = self.axis.shape[-1]
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _model_device(self) -> torch.device:
+        """Resolve the device for input tensors (handles multi-GPU device_map)."""
+        if hasattr(self.model, "hf_device_map"):
+            first_device = next(iter(self.model.hf_device_map.values()))
+            return torch.device(f"cuda:{first_device}" if isinstance(first_device, int) else first_device)
+        return next(self.model.parameters()).device
 
     # ------------------------------------------------------------------
     # Trajectory extraction
@@ -179,7 +247,7 @@ class BasinExperiment:
             handles.append(self.layers[layer_idx].register_forward_hook(make_hook(layer_idx)))
 
         with torch.inference_mode():
-            outputs = self.pm.model(input_ids)
+            outputs = self.model(input_ids)
 
         for h in handles:
             h.remove()
@@ -216,18 +284,11 @@ class BasinExperiment:
                 return hook_fn
             handles.append(self.layers[layer_idx].register_forward_hook(make_hook(layer_idx)))
 
-        # Inject perturbation at perturb_layer via ActivationSteering
-        delta_device = delta.to(self.pm.model.dtype)
-        with ActivationSteering(
-            self.pm.model,
-            steering_vectors=[delta_device],
-            coefficients=[1.0],
-            layer_indices=[perturb_layer],
-            intervention_type="addition",
-            positions="last",
-        ):
+        # Inject perturbation at perturb_layer
+        delta_device = delta.to(self.model.dtype)
+        with _PerturbationHook(self.layers[perturb_layer], delta_device):
             with torch.inference_mode():
-                outputs = self.pm.model(input_ids)
+                outputs = self.model(input_ids)
 
         for h in handles:
             h.remove()
@@ -312,17 +373,15 @@ class BasinExperiment:
     def tokenize(self, prompt: str) -> torch.Tensor:
         """Tokenize a prompt with chat template applied, return input_ids on device."""
         conversation = [{"role": "user", "content": prompt}]
+        # Disable thinking for Qwen models so activations align with precomputed axes
+        chat_kwargs = {}
+        if "qwen" in self.model_name.lower():
+            chat_kwargs["enable_thinking"] = False
         text = self.tokenizer.apply_chat_template(
-            conversation, tokenize=False, add_generation_prompt=True
+            conversation, tokenize=False, add_generation_prompt=True, **chat_kwargs
         )
         tokens = self.tokenizer(text, return_tensors="pt")
-        # With device_map="auto", model has no single .device — find the embedding device
-        if hasattr(self.pm.model, "hf_device_map"):
-            first_device = next(iter(self.pm.model.hf_device_map.values()))
-            device = f"cuda:{first_device}" if isinstance(first_device, int) else first_device
-        else:
-            device = self.pm.model.device
-        return tokens["input_ids"].to(device)
+        return tokens["input_ids"].to(self._model_device())
 
     # ------------------------------------------------------------------
     # Full experiment
@@ -343,7 +402,7 @@ class BasinExperiment:
             - Assistant axis: toward assistant (+v)
             - n_random_dirs random directions
 
-        For each direction × alpha × perturb_layer combination.
+        For each direction x alpha x perturb_layer combination.
         """
         rng = torch.Generator().manual_seed(seed)
         input_ids = self.tokenize(prompt)
