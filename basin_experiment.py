@@ -7,12 +7,8 @@ activation extraction, and hook-based intervention.
 """
 
 import sys
+import importlib.util
 from pathlib import Path
-
-# Add cloned assistant-axis repo to path (avoids installing vllm)
-_AXIS_REPO = Path(__file__).parent / "assistant-axis"
-if _AXIS_REPO.exists() and str(_AXIS_REPO) not in sys.path:
-    sys.path.insert(0, str(_AXIS_REPO))
 
 import torch
 import torch.nn.functional as F
@@ -23,9 +19,28 @@ from typing import Optional
 from huggingface_hub import hf_hub_download
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from assistant_axis.internals.model import ProbingModel
-from assistant_axis.steering import ActivationSteering
-from assistant_axis.axis import load_axis, project
+
+# ---------------------------------------------------------------------------
+# Direct file imports from assistant-axis (bypasses __init__.py which pulls
+# in vllm, sklearn, plotly etc. that we don't need)
+# ---------------------------------------------------------------------------
+def _import_file(module_name: str, file_path: Path):
+    spec = importlib.util.spec_from_file_location(module_name, file_path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+_AXIS_DIR = Path(__file__).parent / "assistant-axis" / "assistant_axis"
+
+_model_mod = _import_file("assistant_axis.internals.model", _AXIS_DIR / "internals" / "model.py")
+_steering_mod = _import_file("assistant_axis.steering", _AXIS_DIR / "steering.py")
+_axis_mod = _import_file("assistant_axis.axis", _AXIS_DIR / "axis.py")
+
+ProbingModel = _model_mod.ProbingModel
+ActivationSteering = _steering_mod.ActivationSteering
+load_axis = _axis_mod.load_axis
+project = _axis_mod.project
 
 
 # ---------------------------------------------------------------------------
