@@ -1,0 +1,27 @@
+[project]
+name = "assistant-basin"
+version = "0.1.0"
+description = "Perturbation-recovery experiments for establishing assistant basin existence in transformers"
+requires-python = ">=3.10"
+dependencies = [
+    "assistant-axis @ git+https://github.com/safety-research/assistant-axis.git",
+    "torch>=2.0",
+    "transformers>=4.40",
+    "huggingface_hub",
+    "numpy",
+    "matplotlib",
+    "pandas",
+    "tqdm",
+    "scipy",
+    "typing_extensions>=4.12",
+]
+
+[project.optional-dependencies]
+notebook = [
+    "jupyter",
+    "ipykernel",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

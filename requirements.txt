@@ -1,9 +1,0 @@
-assistant-axis @ git+https://github.com/safety-research/assistant-axis.git
-torch>=2.0
-transformers>=4.40
-huggingface_hub
-numpy
-matplotlib
-pandas
-tqdm
-scipy
