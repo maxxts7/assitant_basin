@@ -92,7 +92,15 @@ class BasinExperiment:
         axis_path: Optional[str] = None,
         device: Optional[str] = None,
         dtype: torch.dtype = torch.bfloat16,
+        deterministic: bool = False,
     ):
+        if deterministic:
+            torch.use_deterministic_algorithms(True, warn_only=True)
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+            torch.backends.cuda.enable_flash_sdp(False)
+            torch.backends.cuda.enable_mem_efficient_sdp(False)
+
         self.model_name = model_name
         self.pm = ProbingModel(model_name, device=device, dtype=dtype)
         self.tokenizer = self.pm.tokenizer
