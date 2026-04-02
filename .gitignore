@@ -1,0 +1,23 @@
+# Cloned dependencies
+assistant-axis/
+
+# Claude Code local config
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Results (large data files)
+results/*.parquet
+results/*.pt
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
